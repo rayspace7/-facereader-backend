@@ -7,7 +7,7 @@ app.use(cors()); // 실제 배포 시에는 미니앱 도메인만 허용하도�
 app.use(express.json({ limit: '10mb' })); // 사진 base64 용량 고려
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = 'gemini-2.5-flash'; // 무료 티어에서 사용 가능한 모델이에요.
+const GEMINI_MODEL = 'gemini-3.6-flash';
 const PORT = process.env.PORT || 8787;
 
 if (!GEMINI_API_KEY) {
