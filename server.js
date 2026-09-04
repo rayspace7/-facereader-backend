@@ -32,6 +32,37 @@ const SYSTEM_PROMPT = `너는 유쾌하고 위트있는 톤으로 '관상'을 �
   "today_fortune": "오늘의 운을 한 문장으로, 매번 다른 톤으로"
 }`;
 
+// 일시적 오류(503 등)일 때 잠깐 기다렸다가 자동으로 다시 시도해요.
+async function callGeminiWithRetry(url, body, maxRetries = 2) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) return response;
+
+    const errText = await response.text();
+    lastError = { status: response.status, body: errText };
+
+    // 503(과부하), 429(요청 과다)처럼 "잠깐 후 다시 하면 될 만한" 오류만 재시도해요.
+    const isRetryable = response.status === 503 || response.status === 429;
+    if (!isRetryable || attempt === maxRetries) {
+      console.error(`Gemini API 오류 (시도 ${attempt + 1}/${maxRetries + 1}):`, response.status, errText);
+      break;
+    }
+
+    const waitMs = 1000 * (attempt + 1); // 1초, 2초 순서로 대기
+    console.warn(`Gemini API 일시 오류(${response.status}), ${waitMs}ms 후 재시도 (${attempt + 1}/${maxRetries})`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+  const error = new Error('Gemini API 호출 실패');
+  error.details = lastError;
+  throw error;
+}
+
 app.post('/api/gwansang', async (req, res) => {
   try {
     const { image, mediaType } = req.body;
@@ -41,10 +72,9 @@ app.post('/api/gwansang', async (req, res) => {
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    let response;
+    try {
+      response = await callGeminiWithRetry(url, {
         contents: [
           {
             role: 'user',
@@ -58,13 +88,10 @@ app.post('/api/gwansang', async (req, res) => {
           responseMimeType: 'application/json', // Gemini가 JSON만 반환하도록 강제해요.
           temperature: 0.9,
         },
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Gemini API 오류:', response.status, errText);
-      return res.status(502).json({ error: 'AI 분석 서버 호출에 실패했어요.' });
+      });
+    } catch (err) {
+      console.error('Gemini API 재시도 끝에 최종 실패:', err.details || err.message);
+      return res.status(502).json({ error: 'AI 분석 서버가 일시적으로 혼잡해요. 잠시 후 다시 시도해주세요.' });
     }
 
     const data = await response.json();
