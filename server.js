@@ -50,8 +50,12 @@ async function callGeminiWithRetry(url, body, maxRetries = 2) {
     const errText = await response.text();
     lastError = { status: response.status, body: errText };
 
-    // 503(과부하), 429(요청 과다)처럼 "잠깐 후 다시 하면 될 만한" 오류만 재시도해요.
-    const isRetryable = response.status === 503 || response.status === 429;
+    // 하루 할당량(PerDay) 초과는 재시도해도 절대 안 풀려요 - 남은 할당량만 낭비하니 바로 중단해요.
+    const isDailyQuotaExceeded = response.status === 429 && errText.includes('PerDay');
+
+    // 503(일시 과부하)나, 분당 제한 같은 짧은 429만 재시도할 가치가 있어요.
+    const isRetryable = (response.status === 503 || response.status === 429) && !isDailyQuotaExceeded;
+
     if (!isRetryable || attempt === maxRetries) {
       console.error(`Gemini API 오류 (시도 ${attempt + 1}/${maxRetries + 1}):`, response.status, errText);
       break;
@@ -94,7 +98,11 @@ app.post('/api/gwansang', async (req, res) => {
       });
     } catch (err) {
       console.error('Gemini API 재시도 끝에 최종 실패:', err.details || err.message);
-      return res.status(502).json({ error: 'AI 분석 서버가 일시적으로 혼잡해요. 잠시 후 다시 시도해주세요.' });
+      const isDailyQuotaExceeded = err.details?.status === 429 && err.details?.body?.includes('PerDay');
+      const message = isDailyQuotaExceeded
+        ? '오늘의 무료 분석 횟수를 다 썼어요. 내일 다시 시도해주세요.'
+        : 'AI 분석 서버가 일시적으로 혼잡해요. 잠시 후 다시 시도해주세요.';
+      return res.status(502).json({ error: message });
     }
 
     const data = await response.json();
